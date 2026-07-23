@@ -7,8 +7,11 @@
         kernel,
         stdlib,
         crypto,
-        %% Segment compression at seal time (gzip). OTP's own, no extra dep.
-        zlib,
+        %% NOTE: segment compression at seal uses `zlib', which is a module in
+        %% erts, NOT an application. Listing it here is a release-time error
+        %% ("Application needed for release not found: zlib") that `rebar3
+        %% compile' does not catch, because only release assembly resolves this
+        %% list. Nothing to add for gzip.
         %% Collector-only hecate_om service: mesh wiring, no reckon-db store.
         hecate_om
     ]},
