@@ -4,10 +4,11 @@
 # disabled per the migration pattern). Keeps the org's structural rules honest:
 # no deep nesting (max one meaningful level), no nested try/catch, no if.
 #
-# The macula NIF is NOT needed for these tests (parse_feed is pure and the mesh
-# is never touched), so no Rust toolchain here — unlike services whose eunit
-# exercises mesh identity. If a test ever mints a UCAN, add the source-NIF build
-# (see reference_ci_nif_source_build).
+# The macula NIF IS needed here, unlike the sensor repos. The archive's at-rest
+# encoding is CBOR via macula_cbor_nif, so its tests decode records back off the
+# tape and load the NIF. Without a source build the .so is simply absent and
+# every test cancels with `nif_not_loaded` — a red run that says nothing about
+# the code. Never a fetched artifact: see reference_ci_nif_source_build.
 name: lint-and-test
 
 on:
@@ -21,9 +22,29 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: erlang:27
+    env:
+      MACULA_FORCE_SOURCE_BUILD: "1"
+      RUSTFLAGS: "-C target-feature=-crt-static"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build toolchain for the macula NIFs
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq build-essential cmake perl git curl
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm the toolchain is on PATH
+        run: |
+          ln -sf "$HOME/.cargo/bin/cargo"  /usr/local/bin/cargo
+          ln -sf "$HOME/.cargo/bin/rustc"  /usr/local/bin/rustc
+          ln -sf "$HOME/.cargo/bin/rustup" /usr/local/bin/rustup
+          cargo --version && rustc --version
+
       - name: Elvis lint
         run: rebar3 lint
+
       - name: EUnit
         run: rebar3 eunit
