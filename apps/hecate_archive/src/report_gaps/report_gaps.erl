@@ -59,7 +59,7 @@ note(Stream, Epoch, Seq, St) ->
 %% the sensor rather than a true one about ourselves.
 advance(undefined, {Source, Dataset} = Stream, Epoch, Seq, St) ->
     logger:info("[archive] stream ~ts/~ts opens at epoch ~b seq ~b",
-                [Source, Dataset, Seq, Epoch]),
+                [Source, Dataset, Epoch, Seq]),
     high(Stream, Epoch, Seq, St);
 advance({Epoch, Last}, Stream, Epoch, Seq, St) when Seq =:= Last + 1 ->
     high(Stream, Epoch, Seq, St);
