@@ -1,0 +1,34 @@
+{application, hecate_archive, [
+    {description, "The collector: persists verbatim sensor observations append-only, forever"},
+    {vsn, "0.1.0"},
+    {registered, [hecate_archive_sup]},
+    {mod, {hecate_archive_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        %% Segment compression at seal time (gzip). OTP's own, no extra dep.
+        zlib,
+        %% Collector-only hecate_om service: mesh wiring, no reckon-db store.
+        hecate_om
+    ]},
+    {env, [
+        %% Where the tape lives. On a beam node this belongs on /bulk (the eMMC
+        %% root is for the OS only). Override ${HECATE_ARCHIVE_ROOT}.
+        {root, "/bulk0/hecate-archive"},
+        %% The topic sensors publish verbatim observations on. Override
+        %% ${HECATE_ARCHIVE_TOPIC}.
+        {topic, <<"archive/observations">>},
+        %% Segment roll period in ms. Segments are bucketed by ARRIVAL wall-clock
+        %% at the archive, never by a record's own timestamps, so a sealed
+        %% segment is never reopened. Override ${HECATE_ARCHIVE_ROLL_MS}.
+        {roll_ms, 3600000},
+        %% Bounded dedupe window: how many recent {source,dataset,seq} keys to
+        %% remember, so at-least-once redelivery after a reconnect does not
+        %% double-write. Override ${HECATE_ARCHIVE_MAX_SEEN}.
+        {max_seen, 20000}
+    ]},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"Codeberg", "https://codeberg.org/hecate-services/hecate-archive"}]}
+]}.

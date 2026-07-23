@@ -1,0 +1,21 @@
+%% Substituted by relx at build; ${VAR} resolves from the environment at boot.
+%%
+%% The archive's own tuning (root, topic, roll period, dedupe window) is read
+%% straight from the environment in code (HECATE_ARCHIVE_ROOT,
+%% HECATE_ARCHIVE_TOPIC, HECATE_ARCHIVE_ROLL_MS, HECATE_ARCHIVE_MAX_SEEN),
+%% falling back to the app.src defaults — so it does not appear here and an unset
+%% var is never a malformed term. This file carries only the mesh wiring, which
+%% every ${VAR} must resolve.
+[
+    {hecate_om, [
+        {service_cert_path, "/etc/hecate/secrets/service-cert.pem"},
+        {station_socket,    "/run/macula/station.sock"},
+        {health_port,       ${HECATE_HEALTH_PORT}},
+        {capability_topic,  <<"_mesh.cap.">>},
+        %% The realm the sensors publish in. An archive in a different realm
+        %% hears nothing and records a perfect, empty, honest tape.
+        {realm,             <<"${HECATE_REALM}">>}
+    ]},
+
+    {kernel, [{logger_level, info}]}
+].

@@ -1,0 +1,29 @@
+# Elvis lint + eunit for hecate-archive.
+#
+# Codeberg is canonical; this runs on the GitHub push-mirror (Forgejo Actions
+# disabled per the migration pattern). Keeps the org's structural rules honest:
+# no deep nesting (max one meaningful level), no nested try/catch, no if.
+#
+# The macula NIF is NOT needed for these tests (parse_feed is pure and the mesh
+# is never touched), so no Rust toolchain here — unlike services whose eunit
+# exercises mesh identity. If a test ever mints a UCAN, add the source-NIF build
+# (see reference_ci_nif_source_build).
+name: lint-and-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: erlang:27
+    steps:
+      - uses: actions/checkout@v4
+      - name: Elvis lint
+        run: rebar3 lint
+      - name: EUnit
+        run: rebar3 eunit
