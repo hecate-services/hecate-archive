@@ -11,7 +11,9 @@ tape_test_() ->
          [{"records are framed and readable back", fun() -> framed(Root) end},
           {"seal writes a gzip and a checksum over the plain bytes",
            fun() -> sealed(Root) end},
-          {"an empty stream leaves nothing behind", fun() -> empty(Root) end}]
+          {"an empty stream leaves nothing behind", fun() -> empty(Root) end},
+          {"a restart inside the same bucket does not destroy the earlier segment",
+           fun() -> restart_preserves(Root) end}]
      end}.
 
 setup() ->
@@ -53,6 +55,33 @@ empty(Root) ->
     %% A stream that opened a segment and wrote nothing is not evidence of an
     %% hour; the gap ledger owns absence, not the tape.
     ?assertEqual([], wildcard(Root, "never-spoke", "*")).
+
+%% The regression for the production data loss of 2026-07-24.
+%%
+%% Two archive runs inside the SAME roll bucket used to collide: the segment path
+%% was a pure function of {stream, bucket}, so the second run reopened the first
+%% run's path and, at seal, overwrote the .gz it had already written. A restart 45
+%% minutes into an hour destroyed all 45 minutes on every stream. Records that had
+%% been received, acknowledged and sealed simply left the tape.
+restart_preserves(Root) ->
+    %% Its own source, so the assertion sees only this test's records.
+    Src = <<"restarted">>,
+    ok = seal_segments:append(Src, <<"ods161">>, <<"first-run">>),
+    ok = gen_server:stop(seal_segments),
+    {ok, _} = seal_segments:start_link(),
+    ok = seal_segments:append(Src, <<"ods161">>, <<"second-run">>),
+    ok = gen_server:stop(seal_segments),
+    {ok, _} = seal_segments:start_link(),
+    %% Both runs' bytes must still be on the tape, in two distinct segments.
+    Sealed = wildcard(Root, "restarted", "*.cbor.gz"),
+    Payloads = lists:sort(
+        [P || Gz <- Sealed,
+              {ok, Bin} <- [file:read_file(Gz)],
+              P <- unframe(zlib:gunzip(Bin))]),
+    ?assertEqual([<<"first-run">>, <<"second-run">>], Payloads),
+    %% ...and every sealed segment carries its checksum.
+    ?assertEqual(2, length(Sealed)),
+    ?assertEqual(length(Sealed), length(wildcard(Root, "restarted", "*.sha256"))).
 
 %% --- helpers ---
 

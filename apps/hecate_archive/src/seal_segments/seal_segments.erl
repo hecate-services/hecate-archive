@@ -41,6 +41,7 @@
 
 -record(st, {root       :: string(),
              roll_ms    :: pos_integer(),
+             run        :: string(),      %% this process's segment-name nonce
              segs = #{} :: #{{binary(), binary()} => #seg{}},
              last_error = none :: none | term()}).
 
@@ -68,8 +69,22 @@ start_link() ->
 init([]) ->
     process_flag(trap_exit, true),
     Root = root(),
-    logger:info("[archive] tape at ~ts, roll ~bs", [Root, roll_ms() div 1000]),
-    {ok, #st{root = Root, roll_ms = roll_ms()}}.
+    Run = run_id(),
+    logger:info("[archive] tape at ~ts, roll ~bs, run ~s",
+                [Root, roll_ms() div 1000, Run]),
+    {ok, #st{root = Root, roll_ms = roll_ms(), run = Run}}.
+
+%% A nonce for THIS process's segment names.
+%%
+%% Without it a segment path is a pure function of {stream, bucket}, and two
+%% archive runs inside the same bucket collide on it: the second opens the same
+%% path and, at seal, `file:write_file(Path ++ ".gz")' OVERWRITES the segment the
+%% first one already sealed. Measured 2026-07-24 in production: a restart 45
+%% minutes into an hourly bucket destroyed all 45 minutes of records that had
+%% already been written and sealed for that hour, on every stream. The tape is
+%% append-only precisely so that cannot happen.
+run_id() ->
+    binary_to_list(binary:encode_hex(crypto:strong_rand_bytes(3), lowercase)).
 
 handle_call({append, Source, Dataset, Cbor}, _From, St) ->
     {Reply, St2} = do_append({Source, Dataset}, Cbor, St),
@@ -127,10 +142,14 @@ wrote({error, Reason}, _Stream, _Seg, _Frame, St) ->
 
 %% --- open / seal ---
 
+%% `append', not `write': `write' truncates, so an unclean shutdown that left a
+%% plain segment behind would have its records destroyed the moment the same path
+%% was opened again. With the run nonce that path collision cannot happen, but a
+%% mode that can only ever add is the right one for a tape.
 open(Stream, Bucket, St) ->
-    Path = segment_path(St#st.root, Stream, Bucket),
+    Path = segment_path(St#st.root, Stream, Bucket, St#st.run),
     ok = filelib:ensure_dir(Path),
-    opened(file:open(Path, [raw, write, binary]), Path, Stream, Bucket, St).
+    opened(file:open(Path, [raw, append, binary]), Path, Stream, Bucket, St).
 
 opened({ok, Fd}, Path, Stream, Bucket, St) ->
     Seg = #seg{path = Path, fd = Fd, ctx = crypto:hash_init(sha256), bucket = Bucket},
@@ -165,7 +184,18 @@ seal({Source, Dataset}, Seg, _St) ->
 %% gzip rather than zstd: OTP ships zlib, and an archive that needs an extra
 %% native dependency to be readable is an archive with a dependency on its own
 %% future build environment.
+%%
+%% Refuses to clobber. The run nonce should already make the target unique, so
+%% an existing .gz here means an assumption has broken; the correct response is
+%% to keep BOTH and shout, never to overwrite a sealed segment.
 compress(Path) ->
+    guarded_compress(filelib:is_regular(Path ++ ".gz"), Path).
+
+guarded_compress(true, Path) ->
+    logger:error("[archive] REFUSING to overwrite sealed segment ~ts.gz; "
+                 "leaving ~ts uncompressed", [Path, Path]),
+    ok;
+guarded_compress(false, Path) ->
     compressed(file:read_file(Path), Path).
 
 compressed({ok, Bin}, Path) ->
@@ -186,12 +216,15 @@ checksum_path(Path) ->
 
 %% --- paths ---
 
-%% <root>/<source>/<dataset>/<YYYY>/<MM>/<DD>/<source>-<YYYYMMDD>T<HH><MM>.cbor
-segment_path(Root, {Source, Dataset}, Bucket) ->
+%% <root>/<source>/<dataset>/<YYYY>/<MM>/<DD>/<source>-<YYYYMMDD>T<HHMM>-<run>.cbor
+%%
+%% The run nonce is what makes two archive processes writing the same bucket
+%% land on different files instead of one destroying the other's work.
+segment_path(Root, {Source, Dataset}, Bucket, Run) ->
     {{Y, M, D}, {H, Min, _S}} =
         calendar:system_time_to_universal_time(Bucket, millisecond),
-    Name = io_lib:format("~ts-~4..0b~2..0b~2..0bT~2..0b~2..0b.cbor",
-                         [Source, Y, M, D, H, Min]),
+    Name = io_lib:format("~ts-~4..0b~2..0b~2..0bT~2..0b~2..0b-~s.cbor",
+                         [Source, Y, M, D, H, Min, Run]),
     filename:join([Root, safe(Source), safe(Dataset),
                    io_lib:format("~4..0b", [Y]),
                    io_lib:format("~2..0b", [M]),
